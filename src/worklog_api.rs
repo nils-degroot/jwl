@@ -67,7 +67,7 @@ impl WorklogApi {
                 _ => ApiError::UnknownError,
             })?;
 
-        match response.status().clone() {
+        match response.status() {
             s if s.is_success() => Ok(()),
             StatusCode::NOT_FOUND => Err(ApiError::NotFound {
                 kind: "issue".to_string(),
