@@ -3,12 +3,25 @@ use chrono::{Date, DateTime, Utc};
 use clap::{Parser, Subcommand};
 use view::*;
 
+mod config;
 mod worklog_api;
+
+pub const APPLICATION_NAME: &'_ str = "jwl";
+pub const CONFIG_NAME: &'_ str = "config";
 
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Config {
     authorization: Authorization,
     jira_domain: String,
+}
+
+impl Config {
+    pub(crate) fn new(authorization: Authorization, jira_domain: String) -> Self {
+        Self {
+            authorization,
+            jira_domain,
+        }
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -76,6 +89,8 @@ enum Commands {
         #[arg(value_parser = string_to_date_mapper)]
         date: Option<Date<Utc>>,
     },
+    /// Setup the configuration using a prompt
+    Config,
 }
 
 fn string_to_date_mapper(input: &'_ str) -> Result<Date<Utc>, String> {
@@ -88,10 +103,9 @@ fn string_to_date_mapper(input: &'_ str) -> Result<Date<Utc>, String> {
 }
 
 fn main() -> anyhow::Result<()> {
-    let config = confy::load::<Config>("jwl", "config")?;
-
     match Args::parse().command {
         Commands::View { date, issue } => {
+            let config = confy::load::<Config>(APPLICATION_NAME, CONFIG_NAME)?;
             view_worklog(config, ViewContext::new(date.unwrap_or_else(today), issue))
         }
         Commands::Add {
@@ -99,10 +113,14 @@ fn main() -> anyhow::Result<()> {
             issue,
             comment,
             time_spend,
-        } => add_worklog(
-            config,
-            AddContext::new(date.unwrap_or_else(today), issue, comment, time_spend),
-        ),
+        } => {
+            let config = confy::load::<Config>(APPLICATION_NAME, CONFIG_NAME)?;
+            add_worklog(
+                config,
+                AddContext::new(date.unwrap_or_else(today), issue, comment, time_spend),
+            )
+        }
+        Commands::Config => config::setup_config(),
     }
 }
 
@@ -141,7 +159,7 @@ mod view {
 
     pub(crate) fn view_worklog(config: Config, context: ViewContext) -> anyhow::Result<()> {
         let body = WorklogApi::new(config.jira_domain.clone())
-            .worklogs(context.clone().into(), &config.authorization.clone().into())?;
+            .worklogs(context.clone().into(), &config.authorization.into())?;
 
         for log in body.iter() {
             println!(
@@ -199,7 +217,7 @@ mod add {
 
     pub(crate) fn add_worklog(config: Config, context: AddContext) -> anyhow::Result<()> {
         WorklogApi::new(config.jira_domain)
-            .create_worklog(context.into(), &config.authorization.clone().into())?;
+            .create_worklog(context.into(), &config.authorization.into())?;
 
         Ok(())
     }
