@@ -1,4 +1,4 @@
-use crate::{Authorization, Config, APPLICATION_NAME, CONFIG_NAME};
+use crate::{Authorization, Config, Context, APPLICATION_NAME, CONFIG_NAME};
 use anyhow::Result;
 use dialoguer::{FuzzySelect, Input, Password};
 use thiserror::Error;
@@ -30,8 +30,12 @@ pub fn setup_config() -> Result<()> {
         _ => Err(ConfigError::FailedToSelectAuthorization)?,
     };
 
-    let config = Config::new(authorization, jira_domain);
-    confy::store(APPLICATION_NAME, CONFIG_NAME, config)?;
+    let context = Context::new(None, authorization, jira_domain);
+    confy::store(
+        APPLICATION_NAME,
+        CONFIG_NAME,
+        Config::SingleContext(context),
+    )?;
 
     println!("Config created, application ready for use");
 
