@@ -1,6 +1,8 @@
 use add::*;
+use anyhow::Result;
 use chrono::{Date, DateTime, Utc};
 use clap::{Parser, Subcommand};
+use thiserror::Error;
 use view::*;
 
 mod config;
@@ -9,15 +11,34 @@ mod worklog_api;
 pub const APPLICATION_NAME: &'_ str = "jwl";
 pub const CONFIG_NAME: &'_ str = "config";
 
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[serde(untagged)]
+pub(crate) enum Config {
+    SingleContext(Context),
+    MultipleContexts(Vec<Context>),
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self::SingleContext(Context::default())
+    }
+}
+
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
-pub(crate) struct Config {
+pub(crate) struct Context {
+    name: Option<String>,
     authorization: Authorization,
     jira_domain: String,
 }
 
-impl Config {
-    pub(crate) fn new(authorization: Authorization, jira_domain: String) -> Self {
+impl Context {
+    pub(crate) fn new(
+        name: Option<String>,
+        authorization: Authorization,
+        jira_domain: String,
+    ) -> Self {
         Self {
+            name,
             authorization,
             jira_domain,
         }
@@ -74,6 +95,9 @@ enum Commands {
         #[clap(short, long)]
         #[arg(value_parser = string_to_date_mapper)]
         date: Option<Date<Utc>>,
+        /// Context to use by name, only required when using a config with multiple contexts
+        #[clap(short, long)]
+        context: Option<String>,
     },
     /// Create a new worklog
     Add {
@@ -88,6 +112,9 @@ enum Commands {
         #[clap(short, long)]
         #[arg(value_parser = string_to_date_mapper)]
         date: Option<Date<Utc>>,
+        /// Context to use by name, only required when using a config with multiple contexts
+        #[clap(short, long)]
+        context: Option<String>,
     },
     /// Setup the configuration using a prompt
     Config,
@@ -104,19 +131,25 @@ fn string_to_date_mapper(input: &'_ str) -> Result<Date<Utc>, String> {
 
 fn main() -> anyhow::Result<()> {
     match Args::parse().command {
-        Commands::View { date, issue } => {
-            let config = confy::load::<Config>(APPLICATION_NAME, CONFIG_NAME)?;
-            view_worklog(config, ViewContext::new(date.unwrap_or_else(today), issue))
+        Commands::View {
+            date,
+            issue,
+            context,
+        } => {
+            let context = read_config(context)?;
+            view_worklog(context, ViewContext::new(date.unwrap_or_else(today), issue))
         }
         Commands::Add {
             date,
             issue,
             comment,
             time_spend,
+            context,
         } => {
-            let config = confy::load::<Config>(APPLICATION_NAME, CONFIG_NAME)?;
+            let context = read_config(context)?;
+
             add_worklog(
-                config,
+                context,
                 AddContext::new(date.unwrap_or_else(today), issue, comment, time_spend),
             )
         }
@@ -128,10 +161,36 @@ fn today() -> Date<Utc> {
     Utc::now().date()
 }
 
+#[derive(Debug, Error)]
+enum ReadConfigError {
+    #[error("When using multiple contexts, a context name should be passed")]
+    NoContextNameGiven,
+    #[error("Context `{0}` was not found")]
+    ContextNotFound(String),
+}
+
+fn read_config(context: Option<String>) -> Result<Context> {
+    let config = confy::load::<Config>(APPLICATION_NAME, CONFIG_NAME)?;
+
+    match config {
+        Config::SingleContext(context) => Ok(context),
+        Config::MultipleContexts(contexts) => {
+            let name = context.ok_or(ReadConfigError::NoContextNameGiven)?;
+
+            let context = contexts
+                .into_iter()
+                .find(|c| c.name == Some(name.clone()))
+                .ok_or(ReadConfigError::ContextNotFound(name))?;
+
+            Ok(context)
+        }
+    }
+}
+
 mod view {
     use crate::{
         worklog_api::{ViewWorklogDto, WorklogApi},
-        Config,
+        Context,
     };
     use chrono::{Date, Utc};
 
@@ -157,7 +216,7 @@ mod view {
         }
     }
 
-    pub(crate) fn view_worklog(config: Config, context: ViewContext) -> anyhow::Result<()> {
+    pub(crate) fn view_worklog(config: Context, context: ViewContext) -> anyhow::Result<()> {
         let body = WorklogApi::new(config.jira_domain.clone())
             .worklogs(context.clone().into(), &config.authorization.into())?;
 
@@ -177,7 +236,7 @@ mod view {
 
 mod add {
     use crate::worklog_api::{CreateWorklogDto, WorklogApi};
-    use crate::Config;
+    use crate::Context;
     use chrono::{Date, Utc};
 
     #[derive(Debug)]
@@ -215,7 +274,7 @@ mod add {
         }
     }
 
-    pub(crate) fn add_worklog(config: Config, context: AddContext) -> anyhow::Result<()> {
+    pub(crate) fn add_worklog(config: Context, context: AddContext) -> anyhow::Result<()> {
         WorklogApi::new(config.jira_domain)
             .create_worklog(context.into(), &config.authorization.into())?;
 
